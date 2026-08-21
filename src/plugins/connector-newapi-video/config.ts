@@ -8,7 +8,7 @@ export const connectorFields: ConnectorField[] = [
     required: true,
     default: 'https://api.example.com',
     placeholder: 'https://your-newapi.example.com',
-    description: 'NewAPI 基址。无视频时拼接 /v1/videos/generations，有视频且开启自动 edits 时拼接 /v1/videos/edits（兼容 /v1/video/generations）'
+    description: 'NewAPI 基址。无视频时优先拼接 /v1/videos/generations（404 时回退 /v1/video/generations）；有视频且开启自动 edits 时拼接 /v1/videos/edits'
   },
   {
     key: 'apiKey',

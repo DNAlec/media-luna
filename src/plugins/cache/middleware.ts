@@ -78,6 +78,12 @@ async function downloadAsset(
       headers,
       timeout: 60000
     })
+    const status = typeof resp?.status === 'number' ? resp.status
+      : typeof resp?.statusCode === 'number' ? resp.statusCode
+      : undefined
+    if (resp?.ok === false || (typeof status === 'number' && status >= 400)) {
+      throw new Error(`下载失败: ${status ?? 'unknown'}`)
+    }
     const mime = resp.headers?.get?.('content-type') || 'application/octet-stream'
     const data = Buffer.isBuffer(resp.data) ? resp.data : Buffer.from(resp.data)
     return { buffer: data, mime }

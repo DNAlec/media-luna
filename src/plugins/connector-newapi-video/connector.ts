@@ -141,12 +141,46 @@ function resolveCreateSuffix(requestMode: VideoRequestMode): string {
   return requestMode === 'edits' ? '/v1/videos/edits' : '/v1/videos/generations'
 }
 
+function uniqueUrls(urls: string[]): string[] {
+  return [...new Set(urls.filter(Boolean))]
+}
+
+function resolveCreateUrls(apiUrl: string, requestMode: VideoRequestMode): string[] {
+  const primary = resolveEndpoint(apiUrl, resolveCreateSuffix(requestMode))
+  if (requestMode === 'edits') {
+    return uniqueUrls([primary, resolveEndpoint(apiUrl, '/v1/video/edits')])
+  }
+  // 裸基址默认走复数（xAI/sub2api）；仅暴露单数路由的旧 NewAPI 在 404 后回退
+  return uniqueUrls([primary, resolveEndpoint(apiUrl, '/v1/video/generations')])
+}
+
 function resolvePollSuffixes(requestMode: VideoRequestMode, taskId: string): string[] {
   const id = encodeURIComponent(taskId)
   if (requestMode === 'edits') {
-    return [`/v1/videos/${id}`, `/v1/videos/edits/${id}`]
+    return [`/v1/videos/${id}`, `/v1/videos/edits/${id}`, `/v1/video/edits/${id}`]
   }
-  return [`/v1/videos/generations/${id}`]
+  return [`/v1/videos/generations/${id}`, `/v1/video/generations/${id}`]
+}
+
+async function postWithFallback(
+  ctx: Context,
+  urls: string[],
+  body: Record<string, any>,
+  headers: Record<string, string>,
+  timeout: number
+): Promise<{ url: string; response: any }> {
+  let lastError: unknown
+  for (let i = 0; i < urls.length; i++) {
+    try {
+      const response = await ctx.http.post(urls[i], body, { headers, timeout })
+      return { url: urls[i], response }
+    } catch (error) {
+      lastError = error
+      if (getHttpStatus(error) === 404 && i < urls.length - 1) continue
+      throw error
+    }
+  }
+  throw lastError
 }
 
 function getHttpStatus(error: unknown): number | undefined {
@@ -166,7 +200,7 @@ async function pollVideoResult(
   intervalMs: number,
   requestMode: VideoRequestMode
 ): Promise<any> {
-  const candidates = resolvePollSuffixes(requestMode, taskId).map(suffix => resolveEndpoint(apiUrl, suffix))
+  const candidates = uniqueUrls(resolvePollSuffixes(requestMode, taskId).map(suffix => resolveEndpoint(apiUrl, suffix)))
   let candidateIndex = 0
   const startTime = Date.now()
 
@@ -279,15 +313,17 @@ async function generate(
     throw new Error('NewAPI Video 图生视频需要可公开访问的输入图片 URL，请启用 storage-input 并配置可公网访问的存储后端')
   }
 
-  const createUrl = resolveEndpoint(apiUrl, resolveCreateSuffix(requestMode))
   const requestBody = buildRequestBody(config, prompt, requestMode, imageUrls, videoUrls, parameters)
-  const createResponse = await ctx.http.post(createUrl, requestBody, {
-    headers: {
+  const { response: createResponse } = await postWithFallback(
+    ctx,
+    resolveCreateUrls(apiUrl, requestMode),
+    requestBody,
+    {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json'
     },
-    timeout: timeout * 1000
-  })
+    timeout * 1000
+  )
 
   const taskId = resolveTaskId(createResponse)
   if (!taskId) throw new Error(`Invalid NewAPI Video response: ${JSON.stringify(createResponse)}`)
