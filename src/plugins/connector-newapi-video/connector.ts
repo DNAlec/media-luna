@@ -73,8 +73,9 @@ function buildRequestBody(config: Record<string, any>, prompt: string, inputImag
   appendNumber(body, 'fps', fps)
   appendNumber(body, 'seed', seed)
   if (negativePrompt) body.negative_prompt = negativePrompt
-  if (inputImageUrls.length === 1) body.image = inputImageUrls[0]
-  if (inputImageUrls.length > 1) body.image = inputImageUrls
+  // xAI/sub2api 的图生视频要求 image 为 { url } 结构，字符串 URL 会返回 422
+  if (inputImageUrls.length === 1) body.image = { url: inputImageUrls[0] }
+  if (inputImageUrls.length > 1) body.image = { url: inputImageUrls }
 
   return body
 }
