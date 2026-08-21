@@ -54,6 +54,28 @@ function parseBase64DataUrl(dataUrl: string): { buffer: Buffer; mime: string } |
   }
 }
 
+function resolveDownloadHeaders(
+  url: string,
+  middlewareConfig?: StorageMiddlewareConfig | null,
+  channel?: { connectorConfig?: Record<string, any> } | null
+): Record<string, string> {
+  const headers: Record<string, string> = { ...(middlewareConfig?.downloadHeaders || {}) }
+  if (headers.Authorization || headers.authorization) return headers
+
+  const apiKey = channel?.connectorConfig?.apiKey
+  const apiUrl = channel?.connectorConfig?.apiUrl
+  if (!apiKey || !apiUrl) return headers
+
+  try {
+    if (new URL(url).origin === new URL(apiUrl).origin) {
+      headers.Authorization = `Bearer ${apiKey}`
+    }
+  } catch {
+    // 非法 URL 时不加渠道鉴权，交给后续下载报错
+  }
+  return headers
+}
+
 async function downloadAsset(
   url: string,
   options?: { headers?: Record<string, string>; ctx?: Context }
@@ -254,7 +276,7 @@ export function createStorageMiddleware(): MiddlewareDefinition {
         try {
           const { buffer, mime } = await downloadAsset(asset.url, {
             ctx: mctx.ctx,
-            headers: middlewareConfig?.downloadHeaders
+            headers: resolveDownloadHeaders(asset.url, middlewareConfig, mctx.channel)
           })
           const filename = `output-${asset.kind}-${i}`
 
