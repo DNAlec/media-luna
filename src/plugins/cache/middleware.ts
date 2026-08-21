@@ -71,15 +71,16 @@ async function downloadAsset(
 
   // 优先使用 koishi HTTP 服务下载：自动继承全局代理配置，且支持附加请求头
   if (options?.ctx) {
-    // ctx.http.axios 为底层 axios 实例（完整响应含 headers）
-    const http = options.ctx.http as unknown as { axios: import('axios').AxiosInstance }
-    const resp = await http.axios.get(url, {
+    // ctx.http 为可调用服务（非 axios 实例），返回 fetch 风格 Response，data 为解码后的内容
+    const http = options.ctx.http as unknown as (url: string, config: Record<string, any>) => Promise<any>
+    const resp = await http(url, {
+      method: 'GET',
       headers,
-      responseType: 'arraybuffer',
       timeout: 60000
     })
-    const mime = resp.headers['content-type'] || 'application/octet-stream'
-    return { buffer: Buffer.from(resp.data), mime }
+    const mime = resp.headers?.get?.('content-type') || 'application/octet-stream'
+    const data = Buffer.isBuffer(resp.data) ? resp.data : Buffer.from(resp.data)
+    return { buffer: data, mime }
   }
 
   // 兜底：原生 fetch 下载

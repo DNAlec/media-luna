@@ -8,9 +8,14 @@ function stripTrailingSlash(url: string): string {
 
 function resolveEndpoint(apiUrl: string, suffix: string): string {
   const baseUrl = stripTrailingSlash(apiUrl)
-  // 兼容单数(/v1/video/generations)与复数(/v1/videos/generations)两种 API 路径
-  if (/\/v1\/videos?\/generations(?:\/[^/]+)?$/.test(baseUrl)) {
-    return baseUrl.replace(/\/v1\/videos?\/generations(?:\/[^/]+)?$/, suffix)
+  // 兼容单数(/v1/video/generations)与复数(/v1/videos/generations)两种 API 路径。
+  // 若 apiUrl 显式配置了单数端点，替换时保留单数形式，避免破坏旧配置
+  const m = baseUrl.match(/\/v1\/videos?\/generations(?:\/[^/]+)?$/)
+  if (m) {
+    const matched = m[0]
+    const isPlural = /\/v1\/videos\//.test(matched)
+    const newSuffix = isPlural ? suffix : suffix.replace('/v1/videos/', '/v1/video/')
+    return baseUrl.slice(0, -matched.length) + newSuffix
   }
   return `${baseUrl}${suffix}`
 }
