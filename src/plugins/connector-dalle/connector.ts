@@ -21,6 +21,13 @@ function shouldUseEditsMode(apiMode: string, autoUseEditsForImageInput: boolean,
   return apiMode === 'edits' && imageFiles.length > 0
 }
 
+/** 取 storage-input 中间件上传后的公开图片 URL（R2/S3 等），仅接受 http(s) */
+function getInputImageUrls(parameters?: Record<string, any>): string[] {
+  const urls = parameters?.inputFileUrls
+  if (!Array.isArray(urls)) return []
+  return urls.filter((url): url is string => typeof url === 'string' && /^https?:\/\//i.test(url))
+}
+
 function applyCommonParams(target: Record<string, any>, config: Record<string, any>): void {
   const {
     n,
@@ -57,7 +64,8 @@ async function generate(
   ctx: Context,
   config: Record<string, any>,
   files: FileData[],
-  prompt: string
+  prompt: string,
+  parameters?: Record<string, any>
 ): Promise<OutputAsset[]> {
   const {
     apiUrl,
@@ -91,7 +99,28 @@ async function generate(
 
   // 根据模式选择请求方式
   if (useEditsMode) {
-    // edits 模式：使用 multipart/form-data
+    // 优先使用 storage-input 上传后的公开 URL 走 JSON edits（部分上游如 xAI
+    // 不接受 base64/multipart，只认公网 URL 或 file_id）
+    const inputUrls = getInputImageUrls(parameters)
+    if (inputUrls.length > 0) {
+      return generateWithEditsJson(ctx, {
+        apiUrl,
+        apiKey,
+        model,
+        size,
+        quality,
+        style,
+        n,
+        background,
+        outputFormat,
+        outputCompression,
+        moderation,
+        inputFidelity,
+        user,
+        timeout
+      }, inputUrls, prompt)
+    }
+    // 无公开 URL 时回退 multipart/form-data（兼容 OpenAI 官方 edits 等上游）
     return generateWithEdits(ctx, {
       apiUrl,
       apiKey,
@@ -209,6 +238,48 @@ async function generateWithEdits(
     headers: {
       'Authorization': `Bearer ${apiKey}`
       // Content-Type 由 FormData 自动设置
+    },
+    timeout: timeout * 1000
+  })
+
+  return parseResponse(response)
+}
+
+/** edits 模式（公开 URL 版）：JSON 格式请求，图片以 { type: 'image_url', url } 引用 */
+async function generateWithEditsJson(
+  ctx: Context,
+  config: Record<string, any>,
+  imageUrls: string[],
+  prompt: string
+): Promise<OutputAsset[]> {
+  const {
+    apiUrl,
+    apiKey,
+    model,
+    timeout
+  } = config
+
+  const requestBody: Record<string, any> = {
+    model,
+    prompt
+  }
+
+  // 单图用 image（对象），多图用 images（数组），与 xAI Grok Imagine 的
+  // /v1/images/edits 接口一致（单图对象 / 多图数组）
+  if (imageUrls.length === 1) {
+    requestBody.image = { type: 'image_url', url: imageUrls[0] }
+  } else if (imageUrls.length > 1) {
+    requestBody.images = imageUrls.map(url => ({ type: 'image_url', url }))
+  }
+
+  // 仅在配置了值时才添加参数
+  applyCommonParams(requestBody, config)
+
+  const endpoint = resolveEndpoint(apiUrl, 'edits')
+  const response = await ctx.http.post(endpoint, requestBody, {
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
     },
     timeout: timeout * 1000
   })
