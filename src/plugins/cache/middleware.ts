@@ -9,6 +9,21 @@ import type {
 } from '../../core'
 import type { CacheService } from './service'
 import { getExtensionFromMime } from './utils'
+import { ProxyAgent } from 'undici'
+import { readFileSync } from 'fs'
+
+// [local patch 2026-09-05] imgen.x.ai 等公网图床直连必挂（undici IPv6/IPv4 超时），走代理下载
+const _proxyAgent = new ProxyAgent('http://127.0.0.1:7897')
+
+function _isInternalAssetUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0' ||
+      host.startsWith('192.168.') || host.startsWith('10.') || host.startsWith('172.') || host.startsWith('169.254.')
+  } catch {
+    return false
+  }
+}
 
 // ============ 中间件配置 ============
 
@@ -58,8 +73,15 @@ async function downloadAsset(url: string): Promise<{ buffer: Buffer; mime: strin
     throw new Error('无效的 base64 data URL')
   }
 
-  // 普通 URL，使用 fetch 下载
-  const resp = await fetch(url)
+  // 普通 URL，使用 fetch 下载（公网走代理，内网直连）
+  // [local patch 2026-09-08] sub2api 视频 content 下载必须带 Authorization（无 key 401，query 带 key 被硬拒）
+  let _sub2Key = ''
+  try { _sub2Key = readFileSync('/home/alec/.koishi/sub2api_key.txt', 'utf8').trim() } catch { _sub2Key = '' }
+  const _isSub2ApiUrl = (u: string) => /^(https?:\/\/)?(127\.0\.0\.1|192\.168\.50\.178)(:\d+)?\/v1\/videos\//.test(u)
+  const _headers = _isSub2ApiUrl(url) && _sub2Key ? { 'Authorization': `Bearer ${_sub2Key}` } : undefined
+  const resp = _isInternalAssetUrl(url)
+    ? await fetch(url, { headers: _headers })
+    : await fetch(url, { dispatcher: _proxyAgent, headers: _headers } as RequestInit)
   if (!resp.ok) throw new Error(`下载失败: ${resp.status}`)
   const arrayBuffer = await resp.arrayBuffer()
   const mime = resp.headers.get('content-type') || 'application/octet-stream'
