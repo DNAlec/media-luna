@@ -50,10 +50,11 @@ function normalizeStatus(status: unknown): string {
 }
 
 function resolveTaskId(response: any): string | null {
-  return response?.id || response?.task_id || response?.taskId || null
+  return response?.id || response?.task_id || response?.taskId || response?.video_id || response?.videoId || null
 }
 
 function resolveVideoUrl(response: any): string | null {
+  if (typeof response?.metadata?.url === 'string') return response.metadata.url
   return response?.video_url || response?.url || response?.remixed_from_video_id || null
 }
 
@@ -73,6 +74,24 @@ function buildRequestBody(
     frameRate,
     negativePrompt
   } = config
+
+  // [local patch 2026-09-08] agnes-video-2.5 / 2.5-flash 走 OpenAI Videos 兼容新协议：
+  // 禁 width/height/num_frames/frame_rate，改用 mode/seconds/size/aspect_ratio/images
+  if (model && model.includes('2.5')) {
+    const seconds = resolveDurationSeconds(parameters)
+    const body: Record<string, any> = {
+      model,
+      prompt,
+      mode: inputImageUrls.length > 0 ? 'reference' : (mode || 'text'),
+      size: config.size || '720P',
+      aspect_ratio: config.aspectRatio || '16:9'
+    }
+    if (seconds) body.seconds = String(Math.max(4, Math.min(12, Math.round(Number(seconds)))))
+    appendNumber(body, 'seed', seed)
+    if (negativePrompt) body.negative_prompt = negativePrompt
+    if (inputImageUrls.length > 0) body.images = inputImageUrls
+    return body
+  }
 
   const body: Record<string, any> = {
     model,
@@ -108,10 +127,19 @@ async function pollVideoResult(
   apiKey: string,
   taskId: string,
   timeoutMs: number,
-  intervalMs: number
+  intervalMs: number,
+  model?: string
 ): Promise<any> {
   const startTime = Date.now()
-  const resultUrl = `${stripTrailingSlash(apiUrl)}/${encodeURIComponent(taskId)}`
+  // [local patch 2026-09-08] 2.5 协议用 /agnesapi?video_id=&model_name= 轮询（不再 /v1/videos/{id}）
+  const is25 = !!(model && model.includes('2.5'))
+  let resultUrl: string
+  if (is25) {
+    const base = stripTrailingSlash(apiUrl).replace(/\/videos?$/, '')
+    resultUrl = `${base}/agnesapi?video_id=${encodeURIComponent(taskId)}&model_name=${encodeURIComponent(model!)}`
+  } else {
+    resultUrl = `${stripTrailingSlash(apiUrl)}/${encodeURIComponent(taskId)}`
+  }
 
   while (Date.now() - startTime < timeoutMs) {
     await new Promise(resolve => setTimeout(resolve, intervalMs))
@@ -180,7 +208,8 @@ async function generate(
     apiKey,
     taskId,
     timeout * 1000,
-    Math.max(1000, Number(pollInterval) || 5000)
+    Math.max(1000, Number(pollInterval) || 5000),
+    model
   )
 
   const url = resolveVideoUrl(result)
